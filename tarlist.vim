@@ -33,7 +33,7 @@ function! CheckChecksum(record_list)
 
   " Calculate sum of all character values
   for char in a:record_list
-    let uval = char2nr(iconv(char, "utf-8", "latin1"))
+    let uval = char2nr(char)
     let sval = (uval <= 127 ? uval : -256 + uval)
 
     let signed_sum += sval
