@@ -1,6 +1,6 @@
 " Pluck a single field from the header.  Begin grabbing at the given offset,
-" and grab at most len characters.  Stop earlier if you hit a character
-" that's in the breakat list.
+" and grab at most len characters.  Stop earlier if you hit a character that's
+" in the breakat list.
 "
 " record_list is a List of 512 characters
 " offset and len are Numbers
@@ -297,6 +297,86 @@ function! GetTarHeaders(read_file)
   endwhile
 
   return rv
+endfunction
+
+" Create a v7 tar file from the given list of paths
+" TODO: Support ustar for long filenames
+function! CreateTarFile(filename, paths)
+  let output = []
+
+  for path in a:paths
+    if path[0] == '/' || path[0] == '\' || path[1] == ':'
+      throw "Invalid path name: \"" . path . "\""
+    endif
+
+    let contents = readfile(path, 'b')
+
+    let header = repeat([ "\n" ], 512)
+
+    for i in range(len(path))
+      let char = path[i]
+      let header[i] = char
+    endfor
+
+    let header[100 : 106] = split(printf("%07o", 00644), '\zs')
+    let header[108 : 114] = split(printf("%07o", 1000), '\zs')
+    let header[116 : 122] = split(printf("%07o", 1000), '\zs')
+
+    let size = 0
+    if !empty(contents)
+      for line in contents
+        let size += strlen(line)
+      endfor
+      let size += len(contents) - 1
+    endif
+
+    let header[124 : 134] = split(printf("%011o", size), '\zs')
+
+    let header[136 : 146] = split(printf("%011o", getftime(path)), '\zs')
+
+    " Calculate sum of all character values
+    let sum = 0
+    for char in header
+      if char != "\n"
+        let sum += char2nr(char)
+      endif
+    endfor
+
+    " Add in 8 spaces for the checksum field
+    let sum += 8 * char2nr(' ')
+
+    let header[148 : 153] = split(printf("%06o", sum), '\zs')
+    let header[155] = ' '
+
+    " NUL-pad the file up to a multiple of the block size...
+    let pad = repeat("\n", 512 - size % 512)
+    if !empty(pad) && len(pad) != 512
+      let contents[-1] .= pad
+    endif
+
+    let headerstr = join(header, '')
+
+    if empty(output)
+      let output = [ headerstr ]
+    else
+      let output[-1] .= headerstr
+    endif
+
+    if !empty(contents)
+      let output[-1] .= contents[0]
+      if len(contents) > 1
+        let output += contents[1:]
+      endif
+    endif
+  endfor
+
+  if empty(output)
+    let output = [ '' ]
+  endif
+
+  let output[-1] .= repeat("\n", 1024)
+
+  call writefile(output, a:filename, 'b')
 endfunction
 
 function! UnpackTarFile(read_file, where)
