@@ -120,18 +120,18 @@ class VimballReader(ArchiveReader):
         break # All files handled
 
       if not file.endswith(filemarker):
-        raise "FIXME Bad Vimball"
+        raise Exception("FIXME Bad Vimball")
       file = file[:-len(filemarker)]
 
       numlines = self.archive.readline().rstrip("\n")
       if not numlines.isdigit():
-        raise "FIXME Bad Vimball!"
+        raise Exception("FIXME Bad Vimball!")
 
       lines = ""
       for i in range(int(numlines)):
         line = self.archive.readline()
         if line == '':
-          raise "FIXME Truncated Vimball"
+          raise Exception("FIXME Truncated Vimball")
         lines += line
 
       files[file] = lines
