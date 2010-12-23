@@ -2,15 +2,10 @@
 """A simple Vimball converter.
 
 Note: Conversions like dir2dir and vba2vba would be good for unit testing.
-
-TODO: Rewrite the input to just detect headers.
 """
 
+import gzip, os, sys, time
 from zipfile import ZipFile,ZipInfo
-import time
-import os
-import sys
-import gzip
 
 class ArchiveMember(object):
   """
@@ -58,10 +53,7 @@ class ArchiveInterface(object):
   Provide a common interface for interacting with readers and writers.
   """
   ext = None
-
-  @classmethod
-  def id(cls):
-    return cls.ext
+  id  = classmethod(lambda cls : cls.ext)
 
 class ArchiveReader(ArchiveInterface):
   """
@@ -77,6 +69,13 @@ class ArchiveReader(ArchiveInterface):
   def __iter__(self):
     """
     Generate an iterator over the members of this archive as ArchiveMembers.
+    """
+    raise NotImplementedError
+
+  @classmethod
+  def is_supported(cls, path):
+    """
+    Test whether the file at the given path is supported by this Reader.
     """
     raise NotImplementedError
 
@@ -151,12 +150,23 @@ class VimballReader(ArchiveReader):
       member.data = data
       yield member
 
+  @classmethod
+  def is_supported(self, path):
+    with open(path, 'rU') as fh:
+      lines = [x.strip() for x in fh.read(4096).split('\n')]
+      return 'UseVimball' in lines
+
 class GzippedVimballReader(VimballReader):
   """ Extend the VimballReader to work on gzipped Vimballs. """
   ext = 'vba.gz'
 
   def __init__(self, archivepath):
     self.archive = gzip.open(archivepath, 'r')
+
+  @classmethod
+  def is_supported(self, path):
+    with open(path, 'rb') as fh:
+      return fh.read(2) == '\x1f\x8b'
 
 class VimballWriter(ArchiveWriter):
   ext = 'vba'
@@ -240,8 +250,13 @@ class DirectoryReader(ArchiveReader):
       member.data = file.read()
       yield member
 
+  @classmethod
+  def is_supported(cls, path):
+      return os.path.isdir(path)
+
 class DirectoryWriter(ArchiveWriter):
   """ Provide an ArchiveWriter for filesystem directories. """
+  id  = classmethod(lambda cls : 'dir')
 
   def __init__(self, archivepath):
     self.archivepath = os.path.normpath(archivepath)
@@ -264,12 +279,7 @@ def archiveConvert(read_mgr, write_mgr):
   for member in read_mgr:
     write_mgr.add(member)
 
-READERS = dict([
-  (x.id(), x) for x in (
-    DirectoryReader,
-    VimballReader,
-    GzippedVimballReader
-  )])
+READERS = [DirectoryReader, VimballReader, GzippedVimballReader]
 
 WRITERS = dict([
   (x.id(), x) for x in (
@@ -280,40 +290,55 @@ WRITERS = dict([
   )])
 
 if __name__ == '__main__':
-  valid_modes = dict([
-    ('%s2%s' % (x, y), (READERS[x], WRITERS[y]))
-    for x in READERS for y in WRITERS
-    if x != y
-  ])
-
   def _mode_default(parser):
     # Make it more HFS+/FAT/NTFS-friendly with .lower()
-    mode = parser.get_prog_name().lower()
+    mode = parser.get_prog_name().lower().rsplit('2', 1)[-1]
     return mode[:-3] if mode.endswith(".py") else mode
 
   from optparse import OptionParser
   parser = OptionParser(description="A simple Vimball converter",
-    usage='%prog [options] <source file> <destination file>',
+    usage='%prog [options] <source file> [destination file]',
     epilog="Conversion modes can also be specified by naming this script")
-  parser.add_option('-m', '--mode', action="store", dest="mode",
-    type="choice", choices=valid_modes.keys(), default=_mode_default(parser),
-    help="Specify a non-default conversion (eg. dir2vba)")
-  parser.add_option('--list_mode', action="store_true", dest="list_modes",
-    default=False, help="List supported conversion modes")
+  parser.add_option('-f', '--outfmt', action="store", dest="outmode",
+    type="choice", choices=WRITERS.keys(), default=_mode_default(parser),
+    help="Specify a non-default output format")
+  parser.add_option('--list_outputs', action="store_true", dest="list_outputs",
+    default=False, help="List supported output formats")
 
   opts, args = parser.parse_args()
 
-  if opts.list_modes:
-    print '\n'.join(valid_modes) + '\n'
+  if opts.list_outputs:
+    print '\n'.join(WRITERS.keys()) + '\n'
     sys.exit()
 
   if not 0 < len(args) < 3:
     parser.print_help()
     sys.exit(1)
 
+  for Reader in READERS:
+    if Reader.is_supported(args[0]):
+      reader = Reader(args[0])
+      break
+  else:
+    raise IOError("Input format unsupported: %s" % args[0])
+
+  Writer = WRITERS[opts.outmode]
   if len(args) == 1:
-    args.append(os.path.basename(args[0]))
+    outfile = os.path.basename(args[0])
+    changed = False
 
-  params = [cls(arg) for cls, arg in zip(valid_modes[opts.mode], args)]
+    if reader.ext and outfile.endswith(reader.ext):
+      outfile = outfile[:-(len(reader.ext) + 1)]
+      changed = True
 
-  archiveConvert(*params)
+    if Writer.ext:
+      outfile = '%s.%s' % (outfile, Writer.ext)
+      changed = True
+
+    if os.path.abspath(args[0]) == os.path.abspath(outfile):
+      outfile = '%s.out' % outfile
+
+    args.append(outfile)
+  writer = Writer(outfile)
+
+  archiveConvert(reader, writer)
