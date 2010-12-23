@@ -8,8 +8,7 @@ import gzip, os, sys, time
 from zipfile import ZipFile,ZipInfo
 
 class ArchiveMember(object):
-  """
-  Represent the information for a member of an archive.
+  """Represent the information for a member of an archive.
 
   The following attributes will be supported:
   name		Name of the member (must be provided)
@@ -20,8 +19,7 @@ class ArchiveMember(object):
   """
 
   def __init__(self, name):
-    """
-    Construct an archive member with the given name.
+    """Construct an archive member with the given name.
 
     Note: Not thread safe, because of setting/resetting umask!
     """
@@ -49,51 +47,35 @@ class ArchiveMember(object):
       self.__dict__[name] = value
 
 class ArchiveInterface(object):
-  """
-  Provide a common interface for interacting with readers and writers.
-  """
+  """Provide a common interface for interacting with readers and writers."""
   ext = None
   id  = classmethod(lambda cls : cls.ext)
 
 class ArchiveReader(ArchiveInterface):
-  """
-  Provide an interface for iterating over the members of an archive.
-  """
+  """Provide an interface for iterating over the members of an archive."""
   def __init__(self, archivepath):
-    """
-    Prepare to read the members of the archive given by archivepath.
-    """
+    """Prepare to read the members of the archive given by archivepath."""
     if self.__class__ is ArchiveReader:
       raise NotImplementedError
 
   def __iter__(self):
-    """
-    Generate an iterator over the members of this archive as ArchiveMembers.
-    """
+    """Generate an iterator over the members of this archive as ArchiveMembers."""
     raise NotImplementedError
 
   @classmethod
   def is_supported(cls, path):
-    """
-    Test whether the file at the given path is supported by this Reader.
-    """
+    """Test whether the file at the given path is supported by this Reader."""
     raise NotImplementedError
 
 class ArchiveWriter(ArchiveInterface):
-  """
-  Provide an interface for adding members to an archive.
-  """
+  """Provide an interface for adding members to an archive."""
   def __init__(self, archivepath):
-    """
-    Prepare to write to the archive given by archivepath.
-    """
+    """Prepare to write to the archive given by archivepath."""
     if self.__class__ is ArchiveWriter:
       raise NotImplementedError
 
   def add(self, member):
-    """
-    Add a new member to the archive
-    """
+    """Add a new member to the archive"""
     raise NotImplementedError
 
 class VimballReader(ArchiveReader):
@@ -169,6 +151,7 @@ class GzippedVimballReader(VimballReader):
       return fh.read(2) == '\x1f\x8b'
 
 class VimballWriter(ArchiveWriter):
+  """ Provide an ArchiveWriter for Vimball archives. """
   ext = 'vba'
 
   def __init__(self, archivepath):
@@ -192,6 +175,7 @@ class VimballWriter(ArchiveWriter):
     self.archive.write(data)
 
 class GzippedVimballWriter(VimballWriter):
+  """ Extend the VimballWriter to work on gzipped Vimballs. """
   ext = 'vba.gz'
 
   def __init__(self, archivepath):
@@ -276,6 +260,7 @@ class DirectoryWriter(ArchiveWriter):
       file.close()
 
 def archiveConvert(read_mgr, write_mgr):
+  """ Copy files from an ArchiveReader to an ArchiveWriter. """
   for member in read_mgr:
     write_mgr.add(member)
 
@@ -342,3 +327,5 @@ if __name__ == '__main__':
   writer = Writer(outfile)
 
   archiveConvert(reader, writer)
+
+# vi:sw=2 sts=2
