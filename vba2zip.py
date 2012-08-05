@@ -1,14 +1,14 @@
 #!/usr/bin/env python
+"""A simple Vimball converter.
 
+Note: Conversions like dir2dir and vba2vba would be good for unit testing.
+"""
+
+import gzip, os, sys, time
 from zipfile import ZipFile,ZipInfo
-import time
-import os
-import sys
-import gzip
 
 class ArchiveMember(object):
-  """
-  Represent the information for a member of an archive.
+  """Represent the information for a member of an archive.
 
   The following attributes will be supported:
   name		Name of the member (must be provided)
@@ -19,8 +19,7 @@ class ArchiveMember(object):
   """
 
   def __init__(self, name):
-    """
-    Construct an archive member with the given name.
+    """Construct an archive member with the given name.
 
     Note: Not thread safe, because of setting/resetting umask!
     """
@@ -47,44 +46,41 @@ class ArchiveMember(object):
     else:
       self.__dict__[name] = value
 
-class ArchiveReader(object):
-  """
-  Provide an interface for iterating over the members of an archive.
-  """
+class ArchiveInterface(object):
+  """Provide a common interface for interacting with readers and writers."""
+  ext = None
+  id  = classmethod(lambda cls : cls.ext)
 
+class ArchiveReader(ArchiveInterface):
+  """Provide an interface for iterating over the members of an archive."""
   def __init__(self, archivepath):
-    """
-    Prepare to read the members of the archive given by archivepath.
-    """
+    """Prepare to read the members of the archive given by archivepath."""
     if self.__class__ is ArchiveReader:
       raise NotImplementedError
 
   def __iter__(self):
-    """
-    Generate an iterator over the members of this archive as ArchiveMembers.
-    """
+    """Generate an iterator over the members of this archive as ArchiveMembers."""
     raise NotImplementedError
 
-class ArchiveWriter(object):
-  """
-  Provide an interface for adding members to an archive.
-  """
+  @classmethod
+  def is_supported(cls, path):
+    """Test whether the file at the given path is supported by this Reader."""
+    raise NotImplementedError
 
+class ArchiveWriter(ArchiveInterface):
+  """Provide an interface for adding members to an archive."""
   def __init__(self, archivepath):
-    """
-    Prepare to write to the archive given by archivepath.
-    """
+    """Prepare to write to the archive given by archivepath."""
     if self.__class__ is ArchiveWriter:
       raise NotImplementedError
 
   def add(self, member):
-    """
-    Add a new member to the archive
-    """
+    """Add a new member to the archive"""
     raise NotImplementedError
 
 class VimballReader(ArchiveReader):
   """ Provide an ArchiveReader for Vimball archives. """
+  ext = 'vba'
 
   def __init__(self, archivepath):
     self.archive = open(archivepath, "r")
@@ -106,18 +102,18 @@ class VimballReader(ArchiveReader):
         break # All files handled
 
       if not file.endswith(filemarker):
-        raise "FIXME Bad Vimball"
+        raise Exception("FIXME Bad Vimball")
       file = file[:-len(filemarker)]
 
       numlines = self.archive.readline().rstrip("\n")
       if not numlines.isdigit():
-        raise "FIXME Bad Vimball!"
+        raise Exception("FIXME Bad Vimball!")
 
       lines = ""
       for i in range(int(numlines)):
         line = self.archive.readline()
         if line == '':
-          raise "FIXME Truncated Vimball"
+          raise Exception("FIXME Truncated Vimball")
         lines += line
 
       files[file] = lines
@@ -136,12 +132,28 @@ class VimballReader(ArchiveReader):
       member.data = data
       yield member
 
+  @classmethod
+  def is_supported(self, path):
+    with open(path, 'rU') as fh:
+      lines = [x.strip() for x in fh.read(4096).split('\n')]
+      return 'UseVimball' in lines
+
 class GzippedVimballReader(VimballReader):
   """ Extend the VimballReader to work on gzipped Vimballs. """
+  ext = 'vba.gz'
+
   def __init__(self, archivepath):
     self.archive = gzip.open(archivepath, 'r')
 
+  @classmethod
+  def is_supported(self, path):
+    with open(path, 'rb') as fh:
+      return fh.read(2) == '\x1f\x8b'
+
 class VimballWriter(ArchiveWriter):
+  """ Provide an ArchiveWriter for Vimball archives. """
+  ext = 'vba'
+
   def __init__(self, archivepath):
     self.archive = open(archivepath, 'w')
     self.header_written = False
@@ -163,12 +175,16 @@ class VimballWriter(ArchiveWriter):
     self.archive.write(data)
 
 class GzippedVimballWriter(VimballWriter):
+  """ Extend the VimballWriter to work on gzipped Vimballs. """
+  ext = 'vba.gz'
+
   def __init__(self, archivepath):
     self.archive = gzip.open(archivepath, 'w')
     self.header_written = False
 
 class ZipWriter(ArchiveWriter):
   """ Provide an ArchiveWriter for zip archives. """
+  ext = 'zip'
 
   def __init__(self, archivepath):
     self.archive = ZipFile(archivepath, "w")
@@ -183,6 +199,7 @@ class ZipWriter(ArchiveWriter):
 
 class DirectoryReader(ArchiveReader):
   """ Provide an ArchiveReader for filesystem directories. """
+  id  = classmethod(lambda cls : 'dir')
 
   def __init__(self, archivepath):
     self.archivepath = os.path.normpath(archivepath)
@@ -217,8 +234,13 @@ class DirectoryReader(ArchiveReader):
       member.data = file.read()
       yield member
 
+  @classmethod
+  def is_supported(cls, path):
+      return os.path.isdir(path)
+
 class DirectoryWriter(ArchiveWriter):
   """ Provide an ArchiveWriter for filesystem directories. """
+  id  = classmethod(lambda cls : 'dir')
 
   def __init__(self, archivepath):
     self.archivepath = os.path.normpath(archivepath)
@@ -238,56 +260,72 @@ class DirectoryWriter(ArchiveWriter):
       file.close()
 
 def archiveConvert(read_mgr, write_mgr):
+  """ Copy files from an ArchiveReader to an ArchiveWriter. """
   for member in read_mgr:
     write_mgr.add(member)
 
-def usage():
-  print "usage" # FIXME
-  sys.exit()
+READERS = [DirectoryReader, VimballReader, GzippedVimballReader]
+
+WRITERS = dict([
+  (x.id(), x) for x in (
+    DirectoryWriter,
+    VimballWriter,
+    GzippedVimballWriter,
+    ZipWriter
+  )])
 
 if __name__ == '__main__':
-  argv = sys.argv
+  def _mode_default(parser):
+    # Make it more HFS+/FAT/NTFS-friendly with .lower()
+    mode = parser.get_prog_name().lower().rsplit('2', 1)[-1]
+    return mode[:-3] if mode.endswith(".py") else mode
 
-  if len(argv) != 3 and len(argv) != 4:
-    usage()
+  from optparse import OptionParser
+  parser = OptionParser(description="A simple Vimball converter",
+    usage='%prog [options] <source file> [destination file]',
+    epilog="Conversion modes can also be specified by naming this script")
+  parser.add_option('-f', '--outfmt', action="store", dest="outmode",
+    type="choice", choices=WRITERS.keys(), default=_mode_default(parser),
+    help="Specify a non-default output format")
+  parser.add_option('--list_outputs', action="store_true", dest="list_outputs",
+    default=False, help="List supported output formats")
 
-  if len(argv) == 3:
-    name = argv.pop(0)
-    if name.endswith(".py"):
-      name = name[:-3]
-    name = os.path.basename(name)
+  opts, args = parser.parse_args()
+
+  if opts.list_outputs:
+    print '\n'.join(WRITERS.keys()) + '\n'
+    sys.exit()
+
+  if not 0 < len(args) < 3:
+    parser.print_help()
+    sys.exit(1)
+
+  for Reader in READERS:
+    if Reader.is_supported(args[0]):
+      reader = Reader(args[0])
+      break
   else:
-    del argv[0]
-    name = argv.pop(0)
-    if name.startswith("--"):
-      name = name[2:]
+    raise IOError("Input format unsupported: %s" % args[0])
 
-  split = name.partition("2")
+  Writer = WRITERS[opts.outmode]
+  if len(args) == 1:
+    outfile = os.path.basename(args[0])
+    changed = False
 
-  if split[1] != "2":
-    usage()
+    if reader.ext and outfile.endswith(reader.ext):
+      outfile = outfile[:-(len(reader.ext) + 1)]
+      changed = True
 
-  reader = None
-  writer = None
+    if Writer.ext:
+      outfile = '%s.%s' % (outfile, Writer.ext)
+      changed = True
 
-  if split[0] == "vba":
-    reader = VimballReader(argv[0])
-  elif split[0] == "vba.gz":
-    reader = GzippedVimballReader(argv[0])
-  elif split[0] == "dir":
-    reader = DirectoryReader(argv[0])
-  else:
-    raise NotImplementedError("No such reader: " + split[0])
+    if os.path.abspath(args[0]) == os.path.abspath(outfile):
+      outfile = '%s.out' % outfile
 
-  if split[2] == "zip":
-    writer = ZipWriter(argv[1])
-  elif split[2] == "dir":
-    writer = DirectoryWriter(argv[1])
-  elif split[2] == "vba":
-    writer = VimballWriter(argv[1])
-  elif split[2] == "vba.gz":
-    writer = GzippedVimballWriter(argv[1])
-  else:
-    raise NotImplementedError("No such writer: " + split[2])
+    args.append(outfile)
+  writer = Writer(outfile)
 
   archiveConvert(reader, writer)
+
+# vi:sw=2 sts=2
